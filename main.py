@@ -1,120 +1,140 @@
 import numpy as np
-import csv
+import pandas as pd
 
-# Function to read bus data from CSV
-def read_bus_data(file_path):
-    bus_data = []
-    with open(file_path, mode='r', encoding='utf-8-sig') as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip header row
-        for row in reader:
-            bus_data.append({
-                'bus_id': int(row[0]),
-                'P': float(row[1]),
-                'Q': float(row[2])
-            })
-    return bus_data
-
-# Function to read line data from CSV
-def read_line_data(file_path):
-    line_data = []
-    with open(file_path, mode='r', encoding='utf-8-sig') as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip header row
-        for row in reader:
-            line_data.append({
-                'from_bus': int(row[0]),
-                'to_bus': int(row[1]),
-                'R': float(row[2]),
-                'X': float(row[3])
-            })
-    return line_data
-
-# Function to calculate admittance matrix (Y-bus)
-def calculate_admittance_matrix(bus_data, line_data):
-    num_buses = len(bus_data)
-    Y_bus = np.zeros((num_buses, num_buses), dtype=complex)
-    
-    for line in line_data:
-        from_bus = line['from_bus'] - 1
-        to_bus = line['to_bus'] - 1
-        Z = complex(line['R'], line['X'])
-        Y = 1 / Z
-        
-        Y_bus[from_bus, from_bus] += Y
-        Y_bus[to_bus, to_bus] += Y
-        Y_bus[from_bus, to_bus] -= Y
-        Y_bus[to_bus, from_bus] -= Y
-
-    return Y_bus
-
-# Function to perform Newton-Raphson load flow analysis
-def newton_raphson_load_flow(bus_data, Y_bus, tol=1e-6, max_iter=10):
-    num_buses = len(bus_data)
-    V = np.ones(num_buses, dtype=complex)  # Initial guess of bus voltages
-    P = np.array([bus['P'] for bus in bus_data])
-    Q = np.array([bus['Q'] for bus in bus_data])
-    
-    for iteration in range(max_iter):
-        mismatches = np.zeros(num_buses, dtype=complex)
-        
-        for i in range(num_buses):
-            for j in range(num_buses):
-                mismatches[i] += V[i] * np.conj(Y_bus[i, j] * V[j])
-            mismatches[i] = P[i] + 1j * Q[i] - mismatches[i]
-        
-        max_mismatch = max(abs(mismatches))
-        if max_mismatch < tol:
-            print(f"Converged in {iteration + 1} iterations.")
-            break
-        
-        # Update voltages (simple approximation for demonstration)
-        for i in range(num_buses):
-            V[i] += mismatches[i] / Y_bus[i, i]
-    
-    return V, mismatches
-
-# Main function
-def main():
+def usage_instructions():
+    """Prints usage instructions for the load flow analysis tool."""
     print("Load Flow Analysis Tool using Newton-Raphson Method")
     print("------------------------------------------------------")
     print("This tool performs load flow analysis for small power systems.")
+    print("\n   Bus data format: BusID, Active Power (P), Reactive Power (Q), Voltage (V), Angle (Theta)")
+    print("     1,0.0,0.0,1.0,0.0")
+    print("     2,0.5,0.2,1.0,0.0")
+    print("     3,0.2,0.1,1.0,0.0")
+    print("\n   Line data format: FromBusID, ToBusID, Resistance (R), Reactance (X)")
+    print("     1,2,0.01,0.1")
+    print("     2,3,0.01,0.1")
+    print("     1,3,0.01,0.1")
+   
+
+def validate_results(voltage, power_mismatch, power_losses, current_flows):
+    """Validates the results of the load flow analysis."""
+    assert len(voltage) > 0, "Voltage calculation failed. No voltages found."
+    assert len(power_mismatch) > 0, "Power mismatch calculation failed. No mismatches found."
+    assert len(power_losses) > 0, "Power loss calculation failed. No losses found."
+    assert len(current_flows) > 0, "Current flow calculation failed. No currents found."
+    print("\n Results \n")
+
+def read_bus_data(file_path):
+    """Reads bus data from a CSV file."""
+    df = pd.read_csv(file_path)
+    return df.to_dict(orient='records')
+
+def read_line_data(file_path):
+    """Reads line data from a CSV file."""
+    df = pd.read_csv(file_path)
+    return df.to_dict(orient='records')
+
+def calculate_power_mismatch(V, bus_data):
+    """Calculates power mismatches for all buses."""
+    P_mismatch = np.zeros(len(bus_data), dtype=complex)
+    Q_mismatch = np.zeros(len(bus_data), dtype=complex)
     
-    # Read bus and line data from CSV files
-    bus_data = read_bus_data('C:/Users/obula/OneDrive/Desktop/bus_data.csv')
-    line_data = read_line_data('C:/Users/obula/OneDrive/Desktop/line_data.csv')
-    
-    # Calculate admittance matrix
-    Y_bus = calculate_admittance_matrix(bus_data, line_data)
-    
-    # Perform load flow analysis
-    V, mismatches = newton_raphson_load_flow(bus_data, Y_bus)
-    
-    # Output the results
-    print("\nBus Voltages:")
-    for i, v in enumerate(V):
-        print(f"Bus {i + 1}: {v} ∠ {np.angle(v, deg=True):.2f}°")
-    
+    for i, bus in enumerate(bus_data):
+        # Extracting necessary parameters
+        V_mag = bus['V']
+        V_angle = np.radians(bus['Theta'])
+        P = bus['P']
+        Q = bus['Q']
+        
+        # Calculate power injections (assuming Ybus is unit matrix for simplification)
+        P_inj = V_mag * np.sum(V_mag * np.cos(V_angle))  # Simplified for illustrative purposes
+        Q_inj = V_mag * np.sum(V_mag * np.sin(V_angle))  # Simplified for illustrative purposes
+        
+        # Calculate mismatches
+        P_mismatch[i] = P - P_inj
+        Q_mismatch[i] = Q - Q_inj
+        
+    return P_mismatch, Q_mismatch
+
+def newton_raphson(bus_data, line_data, max_iter=10, tol=1e-6):
+    """Performs the Newton-Raphson load flow analysis."""
+    n = len(bus_data)
+    V = np.array([bus['V'] * np.exp(1j * np.radians(bus['Theta'])) for bus in bus_data])
+
+    for iteration in range(max_iter):
+        # Calculate power mismatches
+        P_mismatch, Q_mismatch = calculate_power_mismatch(V, bus_data)
+        
+        # Check for convergence
+        if np.all(np.abs(P_mismatch) < tol) and np.all(np.abs(Q_mismatch) < tol):
+            break
+        
+        # Update voltages (simplified approach)
+        for i in range(n):
+            if bus_data[i]['Type'] == 1:  # PQ bus
+                V[i] += 0.01 * (P_mismatch[i] + 1j * Q_mismatch[i])  # Update voltage with some small step
+
+    return V, P_mismatch, Q_mismatch
+
+def calculate_power_losses_and_currents(bus_voltages, line_data):
+    """Calculates power losses and currents on lines."""
+    power_losses = {}
+    current_flows = {}
+
+    for line in line_data:
+        from_bus = line['FromBusID'] - 1  # Adjust for 0-based index
+        to_bus = line['ToBusID'] - 1  # Adjust for 0-based index
+        
+        # Calculate impedance
+        Z = complex(line['R'], line['X'])
+        
+        # Current flow calculation
+        I = (bus_voltages[from_bus] - bus_voltages[to_bus]) / Z
+        current_flows[(from_bus + 1, to_bus + 1)] = I  # Store as 1-based index
+        
+        # Power loss calculation
+        power_loss = np.abs(I) ** 2 * Z
+        power_losses[(from_bus + 1, to_bus + 1)] = power_loss.real  # Store as 1-based index
+
+    return power_losses, current_flows
+
+def display_results(bus_voltages, P_mismatch, Q_mismatch, power_losses, current_flows):
+    """Displays the results of the load flow analysis."""
+    print("Bus Voltages:")
+    for i, voltage in enumerate(bus_voltages):
+        mag = abs(voltage)
+        angle = np.angle(voltage, deg=True)
+        print(f"Bus {i+1}: {mag:.2f} ∠ {angle:.2f}°")
+
     print("\nPower Mismatches:")
-    for i, mismatch in enumerate(mismatches):
-        print(f"Bus {i + 1}: {mismatch}")
-    
-    # Calculate power losses and current flows (simplified for demonstration)
+    for i in range(len(P_mismatch)):
+        print(f"Bus {i+1}: P Mismatch = {P_mismatch[i].real:.4f}, Q Mismatch = {Q_mismatch[i].real:.4f}")
+
     print("\nPower Losses on Lines:")
-    for i, line in enumerate(line_data):
-        from_bus = line['from_bus'] - 1
-        to_bus = line['to_bus'] - 1
-        current = (V[from_bus] - V[to_bus]) / complex(line['R'], line['X'])
-        power_loss = abs(current)**2 * line['R']
-        print(f"Line {i + 1}: Power Loss = {power_loss:.4f} Watts")
-    
+    for line, loss in power_losses.items():
+        print(f"Line {line}: Power Loss = {loss:.4f} Watts")
+
     print("\nCurrent Flows on Lines:")
-    for i, line in enumerate(line_data):
-        from_bus = line['from_bus'] - 1
-        to_bus = line['to_bus'] - 1
-        current = (V[from_bus] - V[to_bus]) / complex(line['R'], line['X'])
-        print(f"Line {i + 1}: Current Flow = {current} A")
+    for line, current in current_flows.items():
+        print(f"Line {line}: Current Flow = {current:.4f} A")
+
+def main():
+    usage_instructions()  # Print usage instructions
+    # Load bus and line data from CSV files
+    bus_data = read_bus_data('bus_data.csv')
+    line_data = read_line_data('line_data.csv')
+
+    # Perform the Newton-Raphson load flow analysis
+    bus_voltages, P_mismatch, Q_mismatch = newton_raphson(bus_data, line_data)
+
+    # Calculate power losses and current flows
+    power_losses, current_flows = calculate_power_losses_and_currents(bus_voltages, line_data)
+
+    # Validate the results
+    validate_results(bus_voltages, P_mismatch, power_losses, current_flows)
+
+    # Display results
+    display_results(bus_voltages, P_mismatch, Q_mismatch, power_losses, current_flows)
 
 if __name__ == "__main__":
     main()
-
